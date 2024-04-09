@@ -57,6 +57,18 @@ class Cigar {
 
     [[nodiscard]] int64_t Size() const { return cigar_vec.size(); }
 
+    /**
+     * @brief 分配区间
+     *
+     * 将给定的 Cigar 对象的其他区间插入到当前对象的 cigar_vec 中，并返回插入位置的迭代器。
+     * 首先删除cigar_vec中it指向的两个元素（如果存在的话），
+     *     然后将other.cigar_vec中的所有元素插入到cigar_vec中it原本指向的位置，
+     *     并返回指向新插入的第一个元素的迭代器。
+     * @param other 其他 Cigar 对象
+     * @param it 插入位置的迭代器
+     *
+     * @return 插入位置的迭代器
+     */
     decltype(cigar_vec)::iterator
     AssignInterval(Cigar other, decltype(cigar_vec)::iterator it) {
         for (int i = 0; i < 2; ++i) {

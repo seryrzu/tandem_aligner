@@ -19,6 +19,18 @@ namespace rare_kmer_aligner {
 
     namespace details {
 
+        /**
+         * @brief 获取稀有 k-mer
+         *
+         * 根据给定的 Contig 对象、k 值、最大稀有频率和哈希器对象，获取稀有 k-mer 的集合。
+         *
+         * @param contig Contig 对象
+         * @param k k 值
+         * @param max_rare_freq 最大稀有频率
+         * @param hasher 哈希器对象
+         *
+         * @return 稀有 k-mer 的集合
+         */
         template <typename htype>
         std::set<htype>
         // std::set<std::string>
@@ -63,7 +75,18 @@ namespace rare_kmer_aligner {
         template <typename htype>
         using PosHashVector = std::vector<PosHash<htype>>;
 
-
+        /**
+         * @brief 过滤 kmers
+         *
+         * 根据给定的稀有 kmers 集合，从给定的 Contig 中筛选出稀有的 kmers，并返回其位置和哈希值。
+         *
+         * @param contig Contig 对象
+         * @param rare_kmers 稀有 kmers 集合
+         * @param k k-mer 的长度
+         * @param hasher RollingHash 对象
+         *
+         * @return 包含稀有 kmers 位置和哈希值的 PosHashVector 对象
+         */
         template <typename htype>
         PosHashVector<htype> filter_kmers(const Contig & contig,
                                    const std::unordered_set<htype> & rare_kmers,
@@ -93,13 +116,17 @@ namespace rare_kmer_aligner {
                 return not is_match() and right.has_value();
             }
 
+            /**
+             * 检查是否 right 不包含值（即 right 为空）而 left 包含值。
+             * 这种情况通常表示一个“插入”操作，即 left 指向的位置在比较序列中存在，但在原始序列中不存在。
+            */
             bool is_ins() const {
                 return not is_match() and left.has_value();
             }
         };
 
         template <typename htype>
-        using KmerAlignment = std::vector<AlignedPosHash<htype>>;
+        using KmerAlignment = std::vector<AlignedPosHash<htype>>; // kmer对齐表示的数据结构
 
         template<typename htype>
         KmerAlignment<htype> glob_align(const PosHashVector<htype> & ph1, const PosHashVector<htype> & ph2,
@@ -170,6 +197,14 @@ namespace rare_kmer_aligner {
             return alignment;
         }
 
+        /**
+         * @brief 输出比对结果
+         *
+         * 将给定的 Kmer 比对结果输出到指定的输出流中。
+         *
+         * @param alignment Kmer 比对结果
+         * @param os 输出流
+         */
         template<typename htype>
         void output_alignment(const details::KmerAlignment<htype> & alignment, std::ostream &os) {
             for (const auto & [a, b] : alignment) {
@@ -185,8 +220,14 @@ namespace rare_kmer_aligner {
             }
         }
 
+        /**
+         * 该结构体可能用于生物信息学中的序列比对，
+         * 其中st1和en1表示第一个序列的对齐范围，st2和en2表示第二个序列的对齐范围，
+         * 而is_match表示这两个范围是否匹配。get_size()函数则用于获取对齐的长度
+         * 
+        */
         struct AlignmentBlock {
-            size_t st1 {std::numeric_limits<size_t>::max()};
+            size_t st1 {std::numeric_limits<size_t>::max()}; /* 初始化为size_t的最大值 */
             size_t st2 {std::numeric_limits<size_t>::max()};
             size_t en1 {std::numeric_limits<size_t>::max()};
             size_t en2 {std::numeric_limits<size_t>::max()};
@@ -204,6 +245,15 @@ namespace rare_kmer_aligner {
 
         using AlignmentBlocks = std::vector<AlignmentBlock>;
 
+        /**
+         * @brief 压缩对齐块
+         *
+         * 将给定的 Kmer 对齐对象压缩成对齐块，并返回结果。
+         *
+         * @param alignment Kmer 对齐对象
+         *
+         * @return 对齐块
+         */
         template<typename htype>
         AlignmentBlocks compress_alignment(const KmerAlignment<htype> & alignment) {
             AlignmentBlocks blocks;
@@ -245,6 +295,17 @@ namespace rare_kmer_aligner {
             return blocks;
         }
 
+        /**
+         * @brief 将 Kmer 比对结果转换为块
+         *
+         * 将给定的 Kmer 比对结果转换为块形式，并返回转换后的块。
+         *
+         * @param alignment Kmer 比对结果
+         * @param tol_gap 允许的最大间隔大小
+         * @param k Kmer 的长度
+         *
+         * @return 转换后的块
+         */
         template<typename htype>
         AlignmentBlocks alignment2blocks(const KmerAlignment<htype> & alignment, size_t tol_gap, size_t k) {
             const AlignmentBlocks blocks = compress_alignment(alignment);
@@ -288,6 +349,20 @@ namespace rare_kmer_aligner {
         }
     }
 
+    /**
+     * @brief 对两个序列文件进行稀有kmer比对
+     *
+     * 使用给定的kmer大小、最大稀有频率、容忍间隙和输出目录，对两个序列文件进行稀有kmer比对。
+     *
+     * @param first_path 第一个序列文件的路径
+     * @param second_path 第二个序列文件的路径
+     * @param k kmer的大小
+     * @param max_rare_freq 最大稀有频率
+     * @param tol_gap 容忍间隙
+     * @param outdir 输出目录
+     * @param logger 日志记录器
+     * @param base 哈希函数的基数，默认为239
+     */
     template <typename htype>
     void rare_kmer_align(const std::experimental::filesystem::path & first_path,
                          const std::experimental::filesystem::path & second_path,
@@ -295,21 +370,21 @@ namespace rare_kmer_aligner {
                          const std::experimental::filesystem::path & outdir,
                          logging::Logger & logger,
                          const size_t base = 239) {
-        io::SeqReader first_reader(first_path);
-        std::vector<Contig> first_vec { first_reader.readAllContigs() };
+        io::SeqReader first_reader(first_path); // 读入第一条序列
+        std::vector<Contig> first_vec { first_reader.readAllContigs() }; // 序列转换为 Contig 对象数组
         VERIFY(first_vec.size() == 1);
         Contig first { std::move(first_vec[0]) } ;
         logger.info() << "First length " << first.seq.size() << ", name " << first.id
                       << " from " << first_path << std::endl;
 
-        io::SeqReader second_reader(second_path);
+        io::SeqReader second_reader(second_path); // 第二条序列
         std::vector<Contig> second_vec { second_reader.readAllContigs() };
         VERIFY(second_vec.size() == 1);
         Contig second { std::move(second_vec[0]) } ;
         logger.info() << "Second length " << second.seq.size() << ", name " << second.id
                       << " from " << second_path << std::endl;
 
-        const RollingHash<htype> hasher(k, base);
+        const RollingHash<htype> hasher(k, base); // rolling hash 对象
 
         std::set<htype> rare_kmers_1 { details::get_rare_kmers(first, k, max_rare_freq, hasher) };
         logger.info() << "# rare kmers in first string " << rare_kmers_1.size() << "\n";
@@ -317,6 +392,7 @@ namespace rare_kmer_aligner {
         std::set<htype> rare_kmers_2 { details::get_rare_kmers(second, k, max_rare_freq, hasher) };
         logger.info() << "# rare kmers in second string " << rare_kmers_2.size() << "\n";
 
+        /* 计算rare_kmers_1和rare_kmers_2的交集,并将结果存储在一个新的unordered_set中 */
         std::vector<htype> rare_kmers_vec;
         std::set_intersection(rare_kmers_1.begin(), rare_kmers_1.end(),
                               rare_kmers_2.begin(), rare_kmers_2.end(),

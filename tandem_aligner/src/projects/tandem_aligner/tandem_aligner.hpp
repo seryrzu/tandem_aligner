@@ -14,6 +14,12 @@
 
 namespace tandem_aligner {
 
+/**
+ * @brief 最小序列任务,即一个CIGAR串
+ * 其中每个CigarFragment是一种修改类型{M,X,I,D}以及对应的长度
+ * @param st1 st2 分别表示第一个和第二个序列的起始位置
+ * @param len1 len2 分别表示第一个和第二个序列的长度
+*/
 struct MinSeqTask {
     std::list<CigarFragment>::iterator cigar_it;
     int64_t st1{0}, len1{0};
@@ -28,6 +34,16 @@ class TandemAligner {
     bool no_paths;
     bool bridges;
 
+    /**
+     * @brief 读取指定路径的contig
+     *
+     * 使用给定的路径读取contig，并将其转换为字符串返回。
+     *
+     * @param path 文件路径
+     *
+     * @return 返回contig的字符串表示
+     * @throws std::exception 如果读取过程中发生错误
+     */
     [[nodiscard]] std::string ReadContig(const std::experimental::filesystem::path &path) const {
         io::SeqReader reader(path);
         std::vector<Contig> vec{reader.readAllContigs()};
@@ -39,6 +55,16 @@ class TandemAligner {
         return contig.str();
     }
 
+    /**
+     * @brief 拼接两个字符串，并在中间加上特定符号
+     *
+     * 将第一个字符串和第二个字符串拼接在一起，并在它们之间加上"$"和"#"符号。
+     *
+     * @param first 第一个字符串
+     * @param second 第二个字符串
+     *
+     * @return 拼接后的字符串
+     */
     [[nodiscard]] std::string ConcatContigs(const std::string &first,
                                             const std::string &second) const {
         std::stringstream concat_stream;
@@ -52,12 +78,11 @@ class TandemAligner {
                  const std::string &second,
                  bool exprt,
                  bool assert_validity = true) const {
-        MinSeqTask task = queue.front();
+        MinSeqTask task = queue.front(); // 获取两个字符串的起始位置和长度
         const std::string first_substr = first.substr(task.st1, task.len1);
+        const std::string second_substr = second.substr(task.st2, task.len2);
         const std::string
-            second_substr = second.substr(task.st2, task.len2);
-        const std::string
-            concat = ConcatContigs(first_substr, second_substr);
+            concat = ConcatContigs(first_substr, second_substr); // 将两个字符串拼接在一起
 
         logger.debug() << "Building suffix array...\n";
         const suffix_array::SuffixArray<std::string> suf_arr(concat);
@@ -74,13 +99,18 @@ class TandemAligner {
         if (exprt) {
             std::ofstream os(output_dir/"shortest_matches.tsv");
             os << int_col;
-        }
+        }// 识别出最短锚点
 
-        logger.debug() << "Aligning...\n";
+        logger.debug() << "Aligning...\n"; // 根据主要锚点进行对齐
         Cigar cigar = SparseAligner(logger, output_dir, exprt & no_paths, exprt & bridges).Align(int_col,
-                                                  first_substr, second_substr); //exprt & for primary alignment
+                                                  first_substr, second_substr); //exprt & for primary alignment 
         auto main_cigar_it = main_cigar.AssignInterval(cigar, task.cigar_it);
         logger.debug() << "Finished alignment\n";
+        /*
+            代码首先执行一个序列比对，并将结果存储在cigar对象中。
+            然后，它遍历cigar中的CIGAR片段，检查每对连续的片段，看它们是否都是删除或插入操作，并且长度大于1。如果是，它会将这些信息添加到队列中。
+            同时，它还更新了两个子串的当前位置，基于匹配或错配操作。
+        */
         if (cigar.Size() > 2) {
             int64_t i{task.st1}, j{task.st2};
             auto it1 = cigar.cbegin(), it2 = ++cigar.cbegin();
@@ -118,21 +148,35 @@ class TandemAligner {
             cigar.AssertValidity(first, second);
     }
 
+    /**
+     * @brief 分配不匹配的 CIGAR 记录
+     *
+     * 将给定的两个字符串 first 和 second 的 CIGAR 记录进行比较，
+     * 将不匹配的部分重新分配并更新 CIGAR 记录。
+     *
+     * @param cigar CIGAR 记录对象
+     * @param first 第一个字符串
+     * @param second 第二个字符串
+     */
     void AssignMismatches(Cigar &cigar,
                           const std::string &first,
                           const std::string &second) const {
         if (cigar.Size() < 2)
             return;
+
         auto it1 = cigar.begin(), it2 = ++cigar.begin();
         int i{0}, j{0};
         std::unordered_map<int, int> counter;
         for (; it2!=cigar.end(); ++it1, ++it2) {
             int64_t length1{it1->length}, length2{it2->length};
             CigarMode mode1{it1->mode}, mode2{it2->mode};
+            /* 对初步比对后获得的CIGAR串判断是否存在连续的indel对 */
             if ((mode1==CigarMode::D or mode1==CigarMode::I) and
                 (mode2==CigarMode::D or mode2==CigarMode::I) and
                 length1==length2) {
-                counter[length1]++;
+                // 存在连续的indel对，且其长度相等
+                counter[length1]++; // 记录该长度的square indel对出现的次数
+                // 从CIGAR串中删除当前的indel对，并验证删除后的迭代器位置是否相同
                 it2 = cigar.Erase(it2);
                 it1 = cigar.Erase(it1);
                 VERIFY(it1==it2);
@@ -148,8 +192,8 @@ class TandemAligner {
                         it1 = it2++;
                         if (k==length1)
                             break;
-                        is_eq = !is_eq;
-                        run_len = 0;
+                        is_eq = !is_eq; // 取反以跟踪下一个字符的比较结果
+                        run_len = 0; //计算下一个匹配或非匹配的字符数
                     }
                     run_len++, k++, i++, j++;
                 }
@@ -162,6 +206,7 @@ class TandemAligner {
                 j += length1;
             }
         }
+        /* 识别出来长度相等的indel对，说明这对序列中可能存在匹配和错误匹配 */
         for (auto [length, cnt] : counter) {
             logger.trace() << "Square Indel-block of length " << length
                 << " appears " << cnt << " times\n";
@@ -188,7 +233,7 @@ class TandemAligner {
         const std::string second = ReadContig(second_path);
 
         Cigar cigar;
-        std::queue<MinSeqTask> queue;
+        std::queue<MinSeqTask> queue; // 队列中存储了待处理的序列比对结果CIGAR
         bool matches_exported{false};
         queue.push({cigar.begin(), 0, (int64_t) first.size(), 0,
                     (int64_t) second.size()});
@@ -201,6 +246,8 @@ class TandemAligner {
         queue.pop();
         logger.info() << "Finished running primary alignment\n";
         cigar.Summary(logger);
+        
+        /* 对square indel 对进行迭代处理 */
         logger.info() << "Running recursive alignments...\n";
 
         {
@@ -210,7 +257,7 @@ class TandemAligner {
             logger.info() << "Primary cigar exported to " << cigar_outfile
                           << "\n\n";
         }
-
+            /* 迭代处理的部分，对indel块重复使用RunTask*/
         for (; not queue.empty(); queue.pop()) {
             RunTask(queue, cigar, first, second,
                 /*export_matches*/ false,
