@@ -3,7 +3,7 @@
 //
 
 // TODO: Use bridge-find instead of numbef of paths 
-
+/* 专注于处理稀疏数据的对齐问题。 */
 #pragma once
 
 #include "cigar.hpp"
@@ -17,20 +17,29 @@ class MinFreqInterval {
     int fst_coord{0}, snd_coord{0};
 
  public:
+    /* 构造函数，用于初始化成员变量 */
     MinFreqInterval(int len, int fst_freq, int snd_freq,
                     int fst_coord, int snd_coord) :
         len{len}, fst_freq{fst_freq}, snd_freq{snd_freq},
         fst_coord{fst_coord}, snd_coord{snd_coord} {}
-
+    /* 重载小于运算符，用于比较两个MinFreqInterval对象 */
     friend bool operator<(const MinFreqInterval &lhs,
                           const MinFreqInterval &rhs);
     friend class SparseAligner;
 
+    /**
+     * @brief 计算得分
+     *
+     * 计算并返回得分，该得分为长度与频率乘积的倒数。
+     *
+     * @return 得分，类型为 double
+     */
     [[nodiscard]] double Score() const {
         return double(len)/(fst_freq*snd_freq);
     }
 };
 
+/* 有点像比较两个锚点的先后次序 */
 bool operator<(const MinFreqInterval &lhs, const MinFreqInterval &rhs) {
     return lhs.fst_coord < rhs.fst_coord or
         lhs.fst_coord==rhs.fst_coord and lhs.snd_coord==rhs.snd_coord;
@@ -41,6 +50,11 @@ class SparseAligner {
     const std::experimental::filesystem::path output_dir;
     bool no_paths; 
     bool bridges;
+    /**
+     * 将给定的 MaxDisjointIntervalCollections 转换为 MinFreqInterval 的向量；
+     * 其中每一个MinFreqInterval对象都基于MaxDisjointIntervalCollections中的元素和它们的坐标来构造。
+     * 
+     */
     static std::vector<MinFreqInterval> Cols2Vec(const MaxDisjointIntervalCollections &cols) {
         std::vector<MinFreqInterval> vec;
         for (const MaxDisjointIntervalCollection &col : cols)
@@ -53,6 +67,15 @@ class SparseAligner {
         return vec;
     }
 
+    /**
+     * @brief 获取对齐向量
+     *
+     * 根据给定的 MinFreqInterval 向量，计算并返回对齐向量。
+     *
+     * @param vec MinFreqInterval 向量
+     *
+     * @return 对齐向量,类型为 std::vector<MinFreqInterval>
+     */
     std::vector<MinFreqInterval>
     GetAlignmentVec(const std::vector<MinFreqInterval> &vec) {
         //no_paths mode
@@ -64,8 +87,13 @@ class SparseAligner {
             return {};
         }
         std::vector<double> scores{vec.front().Score()};
-        std::vector<int> backtracks{-1};
+        std::vector<int> backtracks{-1}; // 回溯
 
+        /** 
+         * 获得具有最高得分的索引；
+         * 找到vec中一系列不重叠（或满足某种条件）的形状或对象，这些形状或对象的总分数最高；
+         * 通过backtracks容器记录了达到这个最高分数的路径，以便后续可以进行回溯。
+        */
         double max_score{scores.front()};
         int argmax_score{0};
         for (int i = 1; i < vec.size(); ++i) {
@@ -87,12 +115,13 @@ class SparseAligner {
             }
         }
 
+        /* 回溯并逐渐将具有最高得分的锚点(?) 置入对齐向量中 */
         std::vector<MinFreqInterval> alignment_vec;
         while (argmax_score!=-1) {
             alignment_vec.emplace_back(vec[argmax_score]);
             argmax_score = backtracks[argmax_score];
         }
-        std::reverse(alignment_vec.begin(), alignment_vec.end());
+        std::reverse(alignment_vec.begin(), alignment_vec.end()); // 获得路径后，反转以获得正确路径
 
         logger.debug() << "Max score " << max_score <<
             "; Alignment vector " << alignment_vec.size() << "\n";
@@ -100,6 +129,9 @@ class SparseAligner {
         return alignment_vec;
     }
 
+    /**
+     * 将alignment_vec转换为CIGAR字符串格式
+    */
     Cigar AlignmentVec2Cigar(std::vector<MinFreqInterval> vec,
                              const std::string &fst, const std::string &snd) {
         vec.emplace_back(0, 0, 0, fst.size(), snd.size());
@@ -138,6 +170,19 @@ class SparseAligner {
         return cigar;
     }
 
+
+    /**
+     * @brief 获取未覆盖区域
+     *
+     * 根据给定的 CIGAR 序列和最小频率区间，计算并返回两个字符串的未覆盖区域占比。
+     *
+     * @param cigar CIGAR 序列
+     * @param intervals 最小频率区间
+     * @param fst 第一个字符串
+     * @param snd 第二个字符串
+     *
+     * @return 一个包含两个 double 类型元素的 std::pair，分别表示第一个字符串和第二个字符串的未覆盖区域占比
+     */
     [[nodiscard]] std::pair<double, double>
     GetUncovered(const Cigar &cigar,
                  const std::vector<MinFreqInterval> &intervals,
@@ -194,6 +239,19 @@ class SparseAligner {
         return {fst_uncovered, snd_uncovered};
     }
 
+    /**
+     * @brief 获取没有路径的数量
+     *
+     * 根据给定的回溯数组和路径数量数组，计算给定节点的没有路径的数量。--->获取indel-pairs？
+     * backtracks是一个二维整数向量，
+     * 其中每个内部向量对应GetAlignmentVec函数中计算的一个MinFreqInterval对象的回溯路径
+     * @param i 当前节点的索引
+     * @param backtracks 回溯数组
+     * @param n_paths 路径数量数组
+     *
+     * @return 没有路径的数量
+     * @throws std::overflow_error 如果路径数量超出 long long 类型的范围
+     */
     int get_no_paths(int i, const std::vector<std::vector<int>> &backtracks, std::vector<long long> &n_paths){
         
         for (int pred: backtracks[i]){
@@ -254,7 +312,16 @@ class SparseAligner {
         }
         return reverse_gr;
     }
-        
+      
+    /**
+     * @brief 将有向图转换为无向图
+     *
+     * 将给定的有向图转换为无向图，并返回转换后的无向图。
+     *
+     * @param graph 有向图
+     *
+     * @return 转换后的无向图
+     */        
     std::vector<std::vector<int>>
     undirected_graph(const std::vector<std::vector<int>> &graph) {
         std::vector<std::vector<int>> undir_gr(graph.size()+1);
@@ -268,6 +335,19 @@ class SparseAligner {
         return undir_gr;
     }
 
+    /**
+     * @brief 寻找桥
+     *
+     * 在给定的无向图中寻找桥，即连接两个不同子树的边。
+     *
+     * @param undir_gr 无向图
+     * @param v 当前节点
+     * @param p 父节点
+     * @param low 每个节点的最小时间戳
+     * @param tin 每个节点首次访问的时间戳
+     * @param timer 时间戳计数器
+     * @param bridges 存储桥的向量数组
+     */
     void bridgeSearch( std::vector<std::vector<int>> &undir_gr, int v,
                         int p, std::vector<int> &low, std::vector<int> &tin,
                         int &timer
@@ -295,7 +375,17 @@ class SparseAligner {
             }
         }
     }
-    
+
+    /**
+     * @brief 获取桥的集合
+     *
+     * 根据给定的回溯路径，计算并返回图中所有桥的集合。
+     * 在无向子图上，调用bridgeSearch搜索
+     *
+     * @param backtracks 回溯路径的二维向量
+     *
+     * @return 桥的集合，使用无序映射表示，其中键为整数，值为整数向量
+     */
     std::unordered_map<int, std::vector<int>> getBridges(const std::vector<std::vector<int>> backtracks) {
         std::vector<std::vector<int>>  undir_gr = undirected_graph(backtracks);
         std::vector<int> tin(undir_gr.size());
@@ -421,63 +511,63 @@ class SparseAligner {
                     "; Alignment vector " << alignment_vec.size() << "\n";
                 
                 if(bridges){
-                    // find optimum subgraph
+                    // find optimum subgraph 找到最优子图
                     std::vector<std::vector<int>> backtrack_all_optimum(backtrack_all.size());
                     for (int sink: argmax_score_list){
                         dfs_subgraph(sink,backtrack_all, backtrack_all_optimum);
                     }
 
-                    //bridge-search on optimum subgraph
+                    //bridge-search on optimum subgraph 在最优子图上继续搜索bridge
                     std::unordered_map<int, std::vector<int>> bridges = getBridges(backtrack_all_optimum);
                     export_bridges(bridges,vec,output_dir/"bridges.txt");
                 }
 
                 if (no_paths){
-                std::vector<long long> n_paths_fwd= std::vector<long long>(vec.size());
-                for(int sink: argmax_score_list){
-                    
-                    get_no_paths(sink, backtrack_all, n_paths_fwd);
+                    std::vector<long long> n_paths_fwd= std::vector<long long>(vec.size());
+                    for(int sink: argmax_score_list){
+                        
+                        get_no_paths(sink, backtrack_all, n_paths_fwd);
 
-                    // //TOREMOVE
-                    logger.info()<<n_paths_fwd[sink]<<" Optimum paths from "<<sink<<"\n"; 
+                        // //TOREMOVE
+                        logger.info()<<n_paths_fwd[sink]<<" Optimum paths from "<<sink<<"\n"; 
 
-                }
-
-                // find startpoints of optimum paths
-                std::vector<int> optimum_starts;
-                for(int i =0; i< vec.size(); i++){
-                    if (n_paths_fwd[i]!=0 && backtrack_all[i][0]==-1){
-
-                        //TOREMOVE
-                        logger.info()<<"optimum start at " <<i<<"\n";
-                        optimum_starts.emplace_back(i);
                     }
-                }
+ 
+                    // find startpoints of optimum paths,optimum_starts向量存储了满足特定条件的最优路径的起始点索引。
+                    std::vector<int> optimum_starts;
+                    for(int i =0; i< vec.size(); i++){
+                        if (n_paths_fwd[i]!=0 && backtrack_all[i][0]==-1){
 
-                std::vector<std::vector<int>> backtrack_all_optimum;
-                for (int i =0; i<vec.size(); i++){
-                    backtrack_all_optimum.emplace_back(std::vector<int>());
-                    if(n_paths_fwd[i]>0){
-                        backtrack_all_optimum[i] = backtrack_all[i];
+                            //TOREMOVE
+                            logger.info()<<"optimum start at " <<i<<"\n";
+                            optimum_starts.emplace_back(i);
+                        }
                     }
-                }
 
+                    std::vector<std::vector<int>> backtrack_all_optimum;
+                    for (int i =0; i<vec.size(); i++){
+                        backtrack_all_optimum.emplace_back(std::vector<int>());
+                        if(n_paths_fwd[i]>0){
+                            backtrack_all_optimum[i] = backtrack_all[i];
+                        }
+                    }
 
-                std::vector<long long> n_paths_rev= std::vector<long long>(vec.size());
-                std::vector<std::vector<int>> rev_backtrack_all_optimum = reverse_graph(backtrack_all_optimum);
-                for(int start: optimum_starts){
-                    get_no_paths(start, rev_backtrack_all_optimum, n_paths_rev);
+                    std::vector<long long> n_paths_rev= std::vector<long long>(vec.size());
+                    std::vector<std::vector<int>> rev_backtrack_all_optimum = reverse_graph(backtrack_all_optimum);
+                    for(int start: optimum_starts){
+                        get_no_paths(start, rev_backtrack_all_optimum, n_paths_rev);
 
-                    //TOREMOVE
-                    logger.info()<<"From "<<start<<" found "<<n_paths_rev[start]<<" paths\n";
-                }
+                            //TOREMOVE
+                            logger.info()<<"From "<<start<<" found "<<n_paths_rev[start]<<" paths\n";
+                        }
 
-                //TODO: Change this
-                export_no_paths(vec, n_paths_fwd, n_paths_rev, output_dir/"no_paths.csv");
+                    //TODO: Change this
+                    export_no_paths(vec, n_paths_fwd, n_paths_rev, output_dir/"no_paths.csv");
                 }
                 return alignment_vec;
     }
 
+    /* 在构造函数前使用explicit关键字可以防止编译器自动使用该构造函数进行隐式转换 */
     explicit SparseAligner(logging::Logger &logger, string output_dir, bool no_paths, bool bridges) : logger{logger}, output_dir{output_dir}, no_paths{no_paths}, bridges{bridges} {}
 
     Cigar Align(const MaxDisjointIntervalCollections &cols,
